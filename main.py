@@ -1,4 +1,5 @@
 import requests
+import re
 import os
 import shutil
 import zipfile
@@ -27,7 +28,7 @@ def get_mapset_metadata(mapset_id):
     response.raise_for_status()  # Check for HTTP errors
     return response.json()  # Return mapset metadata
 
-# Function to modify .osu files in the downloaded .osz
+# Modify .osu files in the downloaded .osz
 def modify_osu_files(zip_path, creator_id):
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
         zip_ref.extractall('temp_osz')  # Extract to temporary directory
@@ -40,7 +41,7 @@ def modify_osu_files(zip_path, creator_id):
             with open(osu_file_path, 'r+', encoding='utf-8') as osu_file:
                 content = osu_file.readlines()
 
-                # Modify Creator: field
+                # Modify Creator: field and handle difficulty names
                 for i, line in enumerate(content):
                     if line.startswith('Creator:'):
                         content[i] = f"Creator: {creator_id}\n"  # Update to the mapper's user ID
@@ -48,6 +49,22 @@ def modify_osu_files(zip_path, creator_id):
                         content[i] = "BeatmapID: 0\n"  # Set to 0
                     elif line.startswith('BeatmapSetID:'):
                         content[i] = "BeatmapSetID: -1\n"  # Set to -1
+                    elif line.startswith('Version:'):
+                        version_line = line.strip()
+                        start_index = version_line.index(':') + 1  # Start after 'Version:'
+                        version_name = version_line[start_index:].strip()
+
+                        if "'" in version_name:
+                            apostrophe_index = version_name.index("'")
+                            if apostrophe_index + 1 < len(version_name) and version_name[apostrophe_index + 1] == 's':
+                                # Remove everything up to and including the 's
+                                content[i] = f"Version: {version_name[apostrophe_index + 2:].strip()}\n"
+                            else:
+                                # Remove everything up to and including the apostrophe
+                                content[i] = f"Version: {version_name[apostrophe_index + 1:].strip()}\n"
+                        else:
+                            # If no apostrophe, leave unchanged
+                            content[i] = line  # Keep the original line
 
                 # Seek to the start of the file and write changes
                 osu_file.seek(0)
@@ -60,13 +77,18 @@ def modify_osu_files(zip_path, creator_id):
             os.rename(osu_file_path, new_file_path)
 
     # Create a new .osz file with the modified .osu files
-    new_osz_file_name = zip_path.replace('.osz', '_modified.osz')
+    if not os.path.exists('Maps'):
+        os.makedirs('Maps')  # Create Maps directory if it doesn't exist
+
+    new_osz_file_name = os.path.join('Maps', f"{zip_path.replace('.osz', '_modified.osz')}")
     with zipfile.ZipFile(new_osz_file_name, 'w') as new_zip:
         for file_name in os.listdir('temp_osz'):
             new_zip.write(os.path.join('temp_osz', file_name), arcname=file_name)
-    
+
     shutil.rmtree('temp_osz')  # Clean up temporary directory
     print(f"Created modified .osz: {new_osz_file_name}")
+
+
 
 # Function to process the URLs from the text file
 def process_osz_files(file_path):
@@ -113,6 +135,10 @@ def process_osz_files(file_path):
 
         # Modify the .osu files inside the .osz
         modify_osu_files(osz_file_name, creator_id)
+
+        # Delete the original .osz file after modification
+        os.remove(osz_file_name)
+        print(f"Deleted original .osz: {osz_file_name}")
 
 # Example file path for the URLs
 file_path = 'urls.txt'
