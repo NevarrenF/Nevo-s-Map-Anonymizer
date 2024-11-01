@@ -4,7 +4,7 @@ This is a thing to replace the creator of a map with their userID to make it ano
 ## Usage
 
 1. **Put links into urls.txt**: One per line the program will download and make the edits.
-2. **Run the Script** python main.py
+2. **Run the Script**: python main.py
 3. **Output**: The modified .osz files will be stored in a folder named `Maps`.
 
 ## BlobBlob
