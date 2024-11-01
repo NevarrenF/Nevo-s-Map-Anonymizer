@@ -1,102 +1,125 @@
 import requests
-import shutil
 import os
+import shutil
 import zipfile
 
-# Catboy API URL setup
-base_url = "https://catboy.best"
+# Function to get URLs from a text file
+def get_urls_from_file(file_path):
+    with open(file_path, 'r') as file:
+        urls = file.read().splitlines()
+    return urls
 
-# Function to get mapset metadata using mapset ID from Catboy API
+# Function to extract mapset ID from various URL formats
+def extract_mapset_id(url):
+    # Remove anything after '#' if it exists
+    url = url.split('#')[0]
+    
+    if "beatmapsets" in url:
+        return url.split('/')[-1]  # Get ID from beatmapset URL
+    elif "s" in url:
+        return url.split('/')[-1]  # Handle standard mapset URLs
+    return None  # If the format is not recognized, return None
+
+# Function to get mapset metadata using mapset ID
 def get_mapset_metadata(mapset_id):
-    map_url = f"{base_url}/api/v2/s/{mapset_id}"
+    map_url = f"https://catboy.best/api/v2/s/{mapset_id}"
     response = requests.get(map_url)
     response.raise_for_status()  # Check for HTTP errors
-    return response.json()  # Return the JSON metadata
+    return response.json()  # Return mapset metadata
 
-# Function to download the beatmap file (.osz) from Catboy API
-def download_beatmap(mapset_id):
-    download_url = f"{base_url}/d/{mapset_id}"
-    response = requests.get(download_url, stream=True)
-    response.raise_for_status()  # Check for HTTP errors
-    osz_file_name = f"{mapset_id}.osz"
+# Function to modify .osu files in the downloaded .osz
+def modify_osu_files(zip_path, creator_id):
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        zip_ref.extractall('temp_osz')  # Extract to temporary directory
+
+    # Iterate over the extracted files
+    for file_name in os.listdir('temp_osz'):
+        if file_name.endswith('.osu'):
+            osu_file_path = os.path.join('temp_osz', file_name)
+            print(f"Modifying: {osu_file_path}")
+            with open(osu_file_path, 'r+', encoding='utf-8') as osu_file:
+                content = osu_file.readlines()
+
+                # Modify Creator: field
+                for i, line in enumerate(content):
+                    if line.startswith('Creator:'):
+                        content[i] = f"Creator: {creator_id}\n"  # Update to the mapper's user ID
+                    elif line.startswith('BeatmapID:'):
+                        content[i] = "BeatmapID: 0\n"  # Set to 0
+                    elif line.startswith('BeatmapSetID:'):
+                        content[i] = "BeatmapSetID: -1\n"  # Set to -1
+
+                # Seek to the start of the file and write changes
+                osu_file.seek(0)
+                osu_file.writelines(content)
+                osu_file.truncate()  # Remove any leftover data
+
+            # Rename the .osu file
+            new_file_name = f"{file_name.split('.osu')[0]} ({creator_id}).osu"
+            new_file_path = os.path.join('temp_osz', new_file_name)
+            os.rename(osu_file_path, new_file_path)
+
+    # Create a new .osz file with the modified .osu files
+    new_osz_file_name = zip_path.replace('.osz', '_modified.osz')
+    with zipfile.ZipFile(new_osz_file_name, 'w') as new_zip:
+        for file_name in os.listdir('temp_osz'):
+            new_zip.write(os.path.join('temp_osz', file_name), arcname=file_name)
     
-    with open(osz_file_name, 'wb') as file:
-        shutil.copyfileobj(response.raw, file)
-    print(f"Downloaded: {osz_file_name} - Size: {os.path.getsize(osz_file_name)} bytes")
-    return osz_file_name
+    shutil.rmtree('temp_osz')  # Clean up temporary directory
+    print(f"Created modified .osz: {new_osz_file_name}")
 
-# Function to update the Creator, BeatmapID, and BeatmapSetID fields and rename .osu files
-def update_osu_creator(osz_file_name, creator_id, mapset_metadata):
-    temp_dir = "temp_osz"
-    os.makedirs(temp_dir, exist_ok=True)
-    
-    with zipfile.ZipFile(osz_file_name, 'r') as zip_ref:
-        zip_ref.extractall(temp_dir)
+# Function to process the URLs from the text file
+def process_osz_files(file_path):
+    urls = get_urls_from_file(file_path)
 
-    # Modify each .osu file in the extracted content
-    title = mapset_metadata['title']
-    artist = mapset_metadata['artist']
-    original_creator = mapset_metadata['creator']
-    
-    for filename in os.listdir(temp_dir):
-        if filename.endswith(".osu"):
-            osu_file_path = os.path.join(temp_dir, filename)
-            with open(osu_file_path, 'r', encoding='utf-8') as file:
-                content = file.readlines()
-
-            # Update the Creator, BeatmapID, and BeatmapSetID fields
-            for i, line in enumerate(content):
-                if line.startswith("Creator:"):
-                    content[i] = f"Creator: {creator_id}\n"
-                elif line.startswith("BeatmapID:"):
-                    content[i] = "BeatmapID: 0\n"
-                elif line.startswith("BeatmapSetID:"):
-                    content[i] = "BeatmapSetID: -1\n"
-
-            # Write changes back to the .osu file
-            with open(osu_file_path, 'w', encoding='utf-8') as file:
-                file.writelines(content)
-            print(f"Updated Creator, BeatmapID, and BeatmapSetID in: {filename}")
-
-            # Rename the .osu file to include the creator's user ID
-            difficulty = filename.split('[')[-1]  # Get difficulty name from the original file
-            new_filename = f"{artist} - {title} ({creator_id}) [{difficulty}"
-            os.rename(osu_file_path, os.path.join(temp_dir, new_filename))
-            print(f"Renamed {filename} to {new_filename}")
-
-    # Create a new .osz file with modified .osu files
-    modified_osz_file = f"modified_{osz_file_name}"
-    with zipfile.ZipFile(modified_osz_file, 'w') as zipf:
-        for root, _, files in os.walk(temp_dir):
-            for file in files:
-                file_path = os.path.join(root, file)
-                zipf.write(file_path, os.path.relpath(file_path, temp_dir))
-
-    # Clean up the temporary directory
-    shutil.rmtree(temp_dir)
-    print(f"Created modified .osz: {modified_osz_file}")
-
-# Example list of URLs to download and process
-urls = [
-    "https://osu.ppy.sh/beatmapsets/2273815#osu/4844304",
-]
-
-# Main process function
-def process_osz_files(urls):
     for url in urls:
         print(f"Processing URL: {url}")
-        mapset_id = url.split('/')[-1]  # Extract mapset ID from the URL
+        mapset_id = extract_mapset_id(url)  # Extract mapset ID from the URL
 
-        # Fetch mapset metadata
-        mapset_metadata = get_mapset_metadata(mapset_id)
-        creator_id = mapset_metadata.get("user_id")
+        if not mapset_id:
+            print(f"Error: Could not extract mapset ID from URL: {url}")
+            continue
 
-        # Download the .osz file
-        osz_file_name = download_beatmap(mapset_id)
+        # Fetch mapset metadata using the mapset ID
+        try:
+            mapset_metadata = get_mapset_metadata(mapset_id)
+        except requests.exceptions.HTTPError as e:
+            print(f"Failed to fetch metadata for {mapset_id}: {e}")
+            continue
 
-        # Update .osu files inside the .osz file
-        update_osu_creator(osz_file_name, creator_id, mapset_metadata)
+        # Get creator information
+        creator_id = mapset_metadata.get('user_id')
+        if creator_id is None:
+            print("Error: Creator information not found in the mapset metadata.")
+            continue
+        
+        print(f"Mapper User ID: {creator_id}")
+
+        # Construct download URL for the .osz file
+        download_url = f"https://catboy.best/d/{mapset_id}"
+        response = requests.get(download_url, allow_redirects=True)  # Allow redirects if necessary
+        
+        # Check if the response is okay
+        if response.status_code != 200:
+            print(f"Error downloading {download_url}: {response.status_code} - {response.text}")
+            continue
+
+        # Save the .osz file locally
+        osz_file_name = f"{mapset_id}.osz"
+        with open(osz_file_name, 'wb') as file:
+            file.write(response.content)
+
+        print(f"Downloaded: {osz_file_name} - Size: {len(response.content)} bytes")
+
+        # Modify the .osu files inside the .osz
+        modify_osu_files(osz_file_name, creator_id)
+
+# Example file path for the URLs
+file_path = 'urls.txt'
 
 # Run the processing function
 if __name__ == "__main__":
-    process_osz_files(urls)
+    try:
+        process_osz_files(file_path)
+    except Exception as e:
+        print(f"Error: {e}")
